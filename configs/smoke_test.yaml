@@ -2,43 +2,42 @@
 dataset:
   root: dataset
   train_txt: dataset/train.txt
-  num_frames: 8        # frames sampled per recorded sequence
-  sampling: uniform    # how to sample frames from a sequence (uniform or random)
-  image_size: 256      # resize shorter edge to this
-  crop_size: 224       # final crop size (224x224) fed to model
-  
+  num_frames: 8 # frames sampled per recorded sequence
+  sampling: uniform # how to sample frames from a sequence (uniform or random)
+  image_size: 256 # resize shorter edge to this
+  crop_size: 224 # final crop size (224x224) fed to model
+
 # Model
 model:
   # Branch A: Clothed Body Stream
   # T frames => Vit-B => T X 768 => TT => T X 768 (time aware) => LP => T X 512
-  vit_out_dim: 768     # ViT-B (Sapiens mock) output dimension
-  temporal_heads: 8      # attention heads in temporal transformer
-  temporal_layers: 2    # number of temporal transformer (TT) layers
-  temporal_dropout: 0.1 # dropout (regularization) in temporal transformer 
+  vit_out_dim: 768 # ViT-B (Sapiens mock) output dimension
+  temporal_heads: 8 # attention heads in temporal transformer
+  temporal_layers: 2 # number of temporal transformer (TT) layers
+  temporal_dropout: 0.1 # dropout (regularization) in temporal transformer
   branch_a_out_dim: 512 # linear projection (LP) 768->512
 
   # Branch B: Bare Body Stream
-  # T frames => ResNet-50 => T X 2048 => GRU => 512 => regressor => 
+  # T frames => ResNet-50 => T X 2048 => GRU => 512 => regressor =>
   # SMPL parameters (82) => token encoder => N X 512
   resnet_out_dim: 2048 # ResNet-50 output dimension
-  gru_hidden_dim: 512  # GRU hidden dimension for temporal modeling
-  gru_layers: 2        # number of GRU layers
-  regressor_out_dim: 82   # number of SMPL parameters (72 pose + 10 shape)
-  smpl_num_tokens: 8   # number of tokens (N) to represent the SMPL parameters
-  branch_b_out_dim: 512  # SMPL token encoder output dimension
-  
+  gru_hidden_dim: 512 # GRU hidden dimension for temporal modeling
+  gru_layers: 2 # number of GRU layers
+  regressor_out_dim: 82 # number of SMPL parameters (72 pose + 10 shape)
+  smpl_num_tokens: 8 # number of tokens (N) to represent the SMPL parameters
+  branch_b_out_dim: 512 # SMPL token encoder output dimension
+
   # Fusion: Cross Attention
   # Q: T X 512 (Branch A) attends to K,V: N X 512 (Branch B)
   # Output: T X 512 => avg pool => 512 => Linear + LayerNorm => 512
-  fusion_heads: 8      # cross attention heads
-  fused_dim: 512       # dimension after linear projection 
+  fusion_heads: 8 # cross attention heads
+  fused_dim: 512 # dimension after linear projection
 
   # Heads
-  num_classes: 75     # approximate number of training identities
+  num_classes: 75 # approximate number of training identities
 
 # Smoke test
 smoke:
-  num_sequences: 8     # how many sequences to load (tiny subset)
-  batch_size: 2        # 2 sequences per batch
-  device: cpu 
-  
+  num_sequences: 8 # how many sequences to load (tiny subset)
+  batch_size: 2 # 2 sequences per batch
+  device: cpu
