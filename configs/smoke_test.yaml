@@ -34,7 +34,7 @@ model:
   fused_dim: 512       # dimension after linear projection 
 
   # Heads
-  num_classes: 150     # approximate number of training identities
+  num_classes: 75     # approximate number of training identities
 
 # Smoke test
 smoke:
