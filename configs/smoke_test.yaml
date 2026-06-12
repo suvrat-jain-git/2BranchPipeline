@@ -56,4 +56,4 @@ train:
   unfreeze_hmr_epoch: 3
   unfreeze_all_epoch: 5
   save_every: 2
-  smoke_subset: 8
+  smoke_subset: 64

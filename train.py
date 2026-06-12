@@ -93,7 +93,10 @@ def train_one_epoch(model, loader, optimizer, criterion, device, epoch):
 
         if batch_idx % 10 == 0:
             print(f"  Epoch {epoch} | Batch {batch_idx}/{len(loader)} "
-                  f"| Loss: {loss.item():.4f}")
+                  f"| Loss: {loss.item():.4f}") 
+            print(f"  Predictions: {predicted[:4].tolist()}")
+            print(f"  Targets:     {labels[:4].tolist()}")
+
 
     avg_loss = total_loss / len(loader)
     accuracy = 100.0 * correct / total
@@ -185,12 +188,22 @@ def train(cfg_path='configs/smoke_test.yaml'):
             print("  Phase 2:")
             unfreeze_hmr_backbone(model)
             print(f"  Trainable params: {count_trainable(model):,}")
+            # rebuild optimizer to include newly unfrozen params
+            optimizer = get_optimizer(model, cfg)
+            print("  Optimizer rebuilt for Phase 2")
+            for i, group in enumerate(optimizer.param_groups):
+                print(f"  Group {i} lr: {group['lr']}")
 
         # Phase 3 — unfreeze Branch A backbone
         if epoch == unfreeze_all_epoch:
             print("  Phase 3:")
             unfreeze_sapiens_backbone(model)
             print(f"  Trainable params: {count_trainable(model):,}")
+            # rebuild optimizer to include newly unfrozen params
+            optimizer = get_optimizer(model, cfg)
+            print("  Optimizer rebuilt for Phase 3")
+            for i, group in enumerate(optimizer.param_groups):
+                print(f"  Group {i} lr: {group['lr']}")
 
         avg_loss, accuracy = train_one_epoch(
             model, loader, optimizer, criterion, device, epoch
