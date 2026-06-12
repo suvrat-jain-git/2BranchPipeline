@@ -30,12 +30,11 @@ def extract_embeddings(model, loader, device):
             labels.append(label)
 
     # stack all batches
-    embeddings = torch.cat(embeddings, dim=0)  # [N, 75]
-    labels = torch.cat(labels, dim=0)          # [N]
+    embeddings = torch.cat(embeddings, dim=0)  # total_num_sequences x 75
+    labels = torch.cat(labels, dim=0)          # total_num_sequences
 
-    return embeddings, labels
-
-
+    return embeddings, labels 
+ 
 def compute_rank1_rank5(query_emb, query_labels,
                         gallery_emb, gallery_labels):
     # cosine similarity between all query and gallery embeddings
@@ -172,7 +171,7 @@ def evaluate(cfg_path='configs/smoke_test.yaml',
     device = torch.device(cfg['train']['device'])
     print(f"\nDevice: {device}")
 
-    # ── Model ─────────────────────────────────────────────────────
+    # Model
     print("\n[1/4] Loading model...")
     model = Pipeline(cfg).to(device)
 
@@ -189,7 +188,7 @@ def evaluate(cfg_path='configs/smoke_test.yaml',
         print("  No checkpoint provided — using random weights")
         print("  (for pipeline verification only)")
 
-    # ── Datasets ──────────────────────────────────────────────────
+    # Datasets 
     print("\n[2/4] Loading gallery and query datasets...")
     gallery_dataset = CCVIDDataset(cfg, split='gallery')
     query_dataset   = CCVIDDataset(cfg, split='query')
@@ -210,7 +209,7 @@ def evaluate(cfg_path='configs/smoke_test.yaml',
     print(f"  Gallery sequences: {len(gallery_dataset)}")
     print(f"  Query sequences:   {len(query_dataset)}")
 
-    # ── Extract embeddings ────────────────────────────────────────
+    # Extract embeddings
     print("\n[3/4] Extracting embeddings...")
     gallery_emb, gallery_labels = extract_embeddings(
         model, gallery_loader, device
@@ -222,7 +221,7 @@ def evaluate(cfg_path='configs/smoke_test.yaml',
     print(f"  Gallery embeddings: {gallery_emb.shape}")
     print(f"  Query embeddings:   {query_emb.shape}")
 
-    # ── Compute metrics ───────────────────────────────────────────
+    # Compute metrics
     print("\n[4/4] Computing metrics...")
 
     rank1, rank5 = compute_rank1_rank5(
@@ -264,3 +263,4 @@ if __name__ == '__main__':
         cfg_path='configs/smoke_test.yaml',
         checkpoint_path=checkpoint_path
     )
+    
