@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yaml
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from src.data.dataset import CCVIDDataset
 from src.models.pipeline import Pipeline
 
@@ -97,6 +97,9 @@ def compute_map(query_emb, query_labels,
         ap = precisions.mean().item()
         average_precisions.append(ap)
 
+    if len(average_precisions) == 0:
+        return 0.0
+
     map_score = 100.0 * sum(average_precisions) / len(average_precisions)
     return map_score
 
@@ -168,7 +171,7 @@ def evaluate(cfg_path='configs/smoke_test.yaml',
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)
 
-    device = torch.device(cfg['train']['device'])
+    device = torch.device(cfg['evaluate']['device'])
     print(f"\nDevice: {device}")
 
     # Model
@@ -193,17 +196,39 @@ def evaluate(cfg_path='configs/smoke_test.yaml',
     gallery_dataset = CCVIDDataset(cfg, split='gallery')
     query_dataset   = CCVIDDataset(cfg, split='query')
 
+        # apply subsets if specified in evaluate config
+    gallery_subset = cfg['evaluate'].get('gallery_subset', 0)
+    query_subset   = cfg['evaluate'].get('query_subset', 0)
+
+    if gallery_subset > 0:
+        gallery_dataset = Subset(
+            gallery_dataset,
+            list(range(gallery_subset))
+        )
+        print(f"  Using gallery subset: {gallery_subset} sequences")
+    else:
+        print(f"  Using full gallery:   {len(gallery_dataset)} sequences")
+
+    if query_subset > 0:
+        query_dataset = Subset(
+            query_dataset,
+            list(range(query_subset))
+        )
+        print(f"  Using query subset:   {query_subset} sequences")
+    else:
+        print(f"  Using full query:     {len(query_dataset)} sequences")
+
     gallery_loader = DataLoader(
         gallery_dataset,
-        batch_size=cfg['train']['batch_size'],
+        batch_size=cfg['evaluate']['batch_size'],
         shuffle=False,
-        num_workers=cfg['train']['num_workers']
+        num_workers=cfg['evaluate']['num_workers']
     )
     query_loader = DataLoader(
         query_dataset,
-        batch_size=cfg['train']['batch_size'],
+        batch_size=cfg['evaluate']['batch_size'],
         shuffle=False,
-        num_workers=cfg['train']['num_workers']
+        num_workers=cfg['evaluate']['num_workers']
     )
 
     print(f"  Gallery sequences: {len(gallery_dataset)}")
