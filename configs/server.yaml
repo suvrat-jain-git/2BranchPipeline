@@ -1,13 +1,12 @@
-# Dataset (CCVID)
+# Dataset(CCVID)
 dataset:
   root: dataset
   train_txt: dataset/train.txt
-  num_frames: 16
+  num_frames: 8
   sampling: uniform
   image_size: 256
   crop_size: 224
 
-# Model — identical to smoke test, swap branch_a encoder to Sapiens 2 on server
 model:
   # Branch A: Clothed Body Stream
   # T frames => Sapiens2 => T X 768 => TT => T X 768 => LP => T X 512
@@ -18,8 +17,8 @@ model:
   branch_a_out_dim: 512
 
   # Branch B: Bare Body Stream
-  # T frames => PARE => T X 2048 => GRU => 512 => regressor => 82 => token encoder => N X 512
-  resnet_out_dim: 2048
+  # T frames => PARE/PyMAF/HMR2.0 => T X 2048 => GRU => 512 => regressor => 82 => token encoder => N X 512
+  resnet_out_dim: 2048 # verify this after swapping to HMR2.0
   gru_hidden_dim: 512
   gru_layers: 2
   regressor_out_dim: 82
@@ -35,7 +34,7 @@ model:
   # Task Heads
   num_classes: 75
 
-# Smoke test — run this first on server to verify GPU pipeline
+# Smoke test
 smoke:
   num_sequences: 8
   batch_size: 4
@@ -52,7 +51,16 @@ train:
   weight_decay: 0.01
   lr_step: 20
   lr_gamma: 0.1
-  unfreeze_hmr_epoch: 20   # Phase 2 at epoch 20
-  unfreeze_all_epoch: 40   # Phase 3 at epoch 40
+  unfreeze_hmr_epoch: 20
+  unfreeze_all_epoch: 40
   save_every: 5
-  smoke_subset: 0          # 0 = full 948 sequences
+  smoke_subset: 0
+  val_subset: 150
+
+# Evaluation
+evaluate:
+  device: cuda
+  batch_size: 32
+  num_workers: 4
+  gallery_subset: 0
+  query_subset: 0
