@@ -102,6 +102,31 @@ def train_one_epoch(model, loader, optimizer, criterion, device, epoch):
     accuracy = 100.0 * correct / total
     return avg_loss, accuracy
 
+def validate_one_epoch(model, loader, criterion, device, epoch):
+    model.eval()
+    total_loss = 0.0
+    correct = 0
+    total = 0
+
+    with torch.no_grad():
+        for frames, labels in loader:
+            frames = frames.to(device)
+            labels = labels.to(device)
+
+            # inference mode — no labels passed to ArcFace
+            output = model(frames, labels=None)
+
+            # compute loss without ArcFace margin
+            loss = criterion(output['identity'], labels)
+
+            total_loss += loss.item()
+            predicted = output['identity'].argmax(dim=1)
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
+
+    avg_loss = total_loss / len(loader)
+    accuracy = 100.0 * correct / total
+    return avg_loss, accuracy
 
 def save_checkpoint(model, optimizer, epoch, loss, cfg):
     os.makedirs('runs', exist_ok=True)
@@ -140,14 +165,40 @@ def train(cfg_path='configs/server.yaml'):
     else:
         print(f"  Using full dataset: {len(dataset)} sequences")
 
+    # split dataset into train and val
+    val_size = cfg['train'].get('val_subset', 0)
+    if val_size > 0:
+        train_indices = list(range(len(dataset) - val_size))
+        val_indices   = list(range(len(dataset) - val_size, len(dataset)))
+        train_dataset = Subset(dataset, train_indices)
+        val_dataset   = Subset(dataset, val_indices)
+        print(f"  Train sequences: {len(train_dataset)}")
+        print(f"  Val sequences:   {len(val_dataset)}")
+    else:
+        train_dataset = dataset
+        val_dataset   = None
+        print(f"  Train sequences: {len(train_dataset)}")
+        print(f"  No validation split")
+
     loader = DataLoader(
-        dataset,
+        train_dataset,
         batch_size=cfg['train']['batch_size'],
         shuffle=True,
         num_workers=cfg['train']['num_workers'],
         pin_memory=False
     )
-    print(f"  Batches per epoch: {len(loader)}")
+
+    val_loader = None
+    if val_dataset is not None:
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=cfg['train']['batch_size'],
+            shuffle=False,
+            num_workers=cfg['train']['num_workers'],
+            pin_memory=False
+        )
+
+    print(f"  Train batches per epoch: {len(loader)}")
 
     # Model
     print("\n[2/4] Building model...")
@@ -211,8 +262,16 @@ def train(cfg_path='configs/server.yaml'):
 
         scheduler.step()
 
-        print(f"  Avg Loss:  {avg_loss:.4f}")
-        print(f"  Accuracy:  {accuracy:.2f}%")
+        print(f"  Train Loss: {avg_loss:.4f}")
+        print(f"  Train Acc:  {accuracy:.2f}%")
+
+        # validation
+        if val_loader is not None:
+            val_loss, val_acc = validate_one_epoch(
+                model, val_loader, criterion, device, epoch
+            )
+            print(f"  Val Loss:   {val_loss:.4f}")
+            print(f"  Val Acc:    {val_acc:.2f}%")
 
         if epoch % cfg['train']['save_every'] == 0:
             save_checkpoint(model, optimizer, epoch, avg_loss, cfg)
