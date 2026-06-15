@@ -129,17 +129,18 @@ def validate_one_epoch(model, loader, criterion, device, epoch):
     return avg_loss, accuracy
 
 def save_checkpoint(model, optimizer, epoch, loss, cfg):
-    os.makedirs('runs', exist_ok=True)
+    exp_name = cfg['train'].get('experiment_name', 'default')
+    save_dir = f"runs/{exp_name}"
+    os.makedirs(save_dir, exist_ok=True)
     checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'loss': loss
     }
-    path = f"runs/checkpoint_epoch_{epoch}.pth"
+    path = f"{save_dir}/checkpoint_epoch_{epoch}.pth"
     torch.save(checkpoint, path)
     print(f"  Checkpoint saved: {path}")
-
 
 def train(cfg_path='configs/server.yaml'):
     print("=" * 60)
