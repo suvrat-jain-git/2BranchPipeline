@@ -24,7 +24,7 @@ def extract_embeddings(model, loader, device):
 
             # l2 normalise identity embedding
             # [batch, 75] => [batch, 75] normalised
-            emb = F.normalize(output['identity'], dim=1)
+            emb = F.normalize(output['embedding'], dim=1)
 
             embeddings.append(emb.cpu())
             labels.append(label)
