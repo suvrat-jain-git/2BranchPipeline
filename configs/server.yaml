@@ -15,6 +15,7 @@ model:
   temporal_layers: 2
   temporal_dropout: 0.1
   branch_a_out_dim: 512
+  use_branch_b: true
 
   # Branch B: Bare Body Stream
   # T frames => PARE/PyMAF/HMR2.0 => T X 2048 => GRU => 512 => regressor => 82 => token encoder => N X 512
