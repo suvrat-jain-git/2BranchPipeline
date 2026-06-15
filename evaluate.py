@@ -106,7 +106,7 @@ def compute_map(query_emb, query_labels,
 
 def compute_eer(query_emb, query_labels,
                 gallery_emb, gallery_labels,
-                max_query=50):
+                max_query=1000):
     num_query = query_emb.shape[0]
 
     # skip EER if too many pairs for CPU
@@ -262,7 +262,7 @@ def evaluate(cfg_path='configs/server.yaml',
     eer = compute_eer(
         query_emb, query_labels,
         gallery_emb, gallery_labels,
-        max_query=50
+        max_query=1000
     )
 
     print(f"\n  Rank-1 accuracy: {rank1:.2f}%")
@@ -277,15 +277,25 @@ def evaluate(cfg_path='configs/server.yaml',
 
     return rank1, rank5, map_score, eer
 
-
 if __name__ == '__main__':
-    # use latest checkpoint if available
+    import yaml
+
+    with open('configs/server.yaml', 'r') as f:
+        cfg = yaml.safe_load(f)
+
+    exp_name = cfg['train'].get('experiment_name', 'default')
     checkpoint_path = None
-    if os.path.exists('runs/checkpoint_epoch_6.pth'):
-        checkpoint_path = 'runs/checkpoint_epoch_6.pth'
+
+    for epoch in [60, 50, 40, 30, 20, 10, 6, 5, 4, 2]:
+        path = f"runs/{exp_name}/checkpoint_epoch_{epoch}.pth"
+        if os.path.exists(path):
+            checkpoint_path = path
+            break
+
+    print(f"Experiment:  {exp_name}")
+    print(f"Checkpoint:  {checkpoint_path}")
 
     evaluate(
-        cfg_path='configs/smoke_test.yaml',
+        cfg_path='configs/server.yaml',
         checkpoint_path=checkpoint_path
     )
-    

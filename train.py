@@ -8,20 +8,26 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Subset
 from src.data.dataset import CCVIDDataset
 from src.models.pipeline import Pipeline
-
+from collections import defaultdict
 
 def freeze_backbones(model):
     for param in model.branch_a.backbone.parameters():
         param.requires_grad = False
-    for param in model.branch_b.backbone.parameters():
-        param.requires_grad = False
-    print("  Both backbones frozen")
+    if hasattr(model, 'branch_b'):
+        for param in model.branch_b.backbone.parameters():
+            param.requires_grad = False
+        print("  Both backbones frozen")
+    else:
+        print("  Branch A backbone frozen (no Branch B)")
 
 
 def unfreeze_hmr_backbone(model):
-    for param in model.branch_b.backbone.parameters():
-        param.requires_grad = True
-    print("  Branch B backbone unfrozen")
+    if hasattr(model, 'branch_b'):
+        for param in model.branch_b.backbone.parameters():
+            param.requires_grad = True
+        print("  Branch B backbone unfrozen (ResNet50)")
+    else:
+        print("  No Branch B to unfreeze — skipping")
 
 
 def unfreeze_sapiens_backbone(model):
@@ -33,16 +39,28 @@ def unfreeze_sapiens_backbone(model):
 def count_trainable(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+def split_by_identity(dataset, val_ratio=0.2):
+    identity_to_indices = defaultdict(list)
+    for idx, (seq_path, identity) in enumerate(dataset.sequences):
+        identity_to_indices[identity].append(idx)
+
+    train_indices = []
+    val_indices = []
+
+    for identity, indices in identity_to_indices.items():
+        n_val = max(1, int(len(indices) * val_ratio))
+        val_indices.extend(indices[-n_val:])
+        train_indices.extend(indices[:-n_val])
+
+    return train_indices, val_indices
 
 def get_optimizer(model, cfg):
-    # backbone params — pretrained, use lower lr
-    backbone_params = (
-        list(model.branch_a.backbone.parameters()) +
-        list(model.branch_b.backbone.parameters())
-    )
+    backbone_params = list(model.branch_a.backbone.parameters())
+    if hasattr(model, 'branch_b'):
+        backbone_params += list(model.branch_b.backbone.parameters())
+
     backbone_ids = set(id(p) for p in backbone_params)
 
-    # new components — randomly initialised, use higher lr
     new_params = [
         p for p in model.parameters()
         if id(p) not in backbone_ids
@@ -167,10 +185,9 @@ def train(cfg_path='configs/server.yaml'):
         print(f"  Using full dataset: {len(dataset)} sequences")
 
     # split dataset into train and val
-    val_size = cfg['train'].get('val_subset', 0)
-    if val_size > 0:
-        train_indices = list(range(len(dataset) - val_size))
-        val_indices   = list(range(len(dataset) - val_size, len(dataset)))
+    val_ratio = cfg['train'].get('val_ratio', 0.0)
+    if val_ratio > 0:
+        train_indices, val_indices = split_by_identity(dataset, val_ratio)
         train_dataset = Subset(dataset, train_indices)
         val_dataset   = Subset(dataset, val_indices)
         print(f"  Train sequences: {len(train_dataset)}")
