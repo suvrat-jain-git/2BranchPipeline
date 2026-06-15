@@ -44,7 +44,7 @@ smoke:
 
 # Training
 train:
-  device: cpu
+  device: cuda
   num_epochs: 6
   batch_size: 2
   num_workers: 0
@@ -60,7 +60,7 @@ train:
 
 # Evaluate
 evaluate:
-  device: cpu
+  device: cuda
   batch_size: 2
   num_workers: 0
   gallery_subset: 4
