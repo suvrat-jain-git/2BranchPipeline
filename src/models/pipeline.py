@@ -53,7 +53,7 @@ class Pipeline(nn.Module):
 
         # task heads
         output = self.heads(embedding, labels)
-	output['embedding'] = embedding
+        output['embedding'] = embedding
         return output
 
 if __name__ == '__main__':
