@@ -116,7 +116,7 @@ def save_checkpoint(model, optimizer, epoch, loss, cfg):
     print(f"  Checkpoint saved: {path}")
 
 
-def train(cfg_path='configs/smoke_test.yaml'):
+def train(cfg_path='configs/server.yaml'):
     print("=" * 60)
     print("TRAINING")
     print("=" * 60)

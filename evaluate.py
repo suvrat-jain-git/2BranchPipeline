@@ -161,7 +161,7 @@ def compute_eer(query_emb, query_labels,
     return eer * 100.0
 
 
-def evaluate(cfg_path='configs/smoke_test.yaml',
+def evaluate(cfg_path='configs/server.yaml',
              checkpoint_path=None):
     print("=" * 60)
     print("EVALUATION")
