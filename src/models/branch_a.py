@@ -8,10 +8,10 @@ class BranchA(nn.Module):
         super().__init__()
 
         vit_out_dim = cfg['model']['vit_out_dim']
-        temporal_heads = cfg['model']['temporal_heads']     
-        temporal_layers = cfg['model']['temporal_layers']   
-        temporal_dropout = cfg['model']['temporal_dropout'] 
-        branch_a_out_dim = cfg['model']['branch_a_out_dim'] 
+        temporal_heads = cfg['model']['temporal_heads']
+        temporal_layers = cfg['model']['temporal_layers']
+        temporal_dropout = cfg['model']['temporal_dropout']
+        branch_a_out_dim = cfg['model']['branch_a_out_dim']
 
         # ViT-B backbone — pretrained on ImageNet
         # classification head removed, only encoder kept
@@ -25,7 +25,7 @@ class BranchA(nn.Module):
             d_model=vit_out_dim,
             nhead=temporal_heads,
             dropout=temporal_dropout,
-            batch_first=True    
+            batch_first=True
         )
         self.temporal_transformer = nn.TransformerEncoder(
             encoder_layer,

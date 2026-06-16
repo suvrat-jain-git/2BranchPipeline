@@ -12,7 +12,7 @@ model:
   # Branch A: Clothed Body Stream
   # T frames => Vit-B => T X 768 => TT => T X 768 (time aware) => LP => T X 512
   vit_out_dim: 768
-  temporal_heads: 8 # attention heads in temporal transformer
+  temporal_heads: 8
   temporal_layers: 2
   temporal_dropout: 0.1
   branch_a_out_dim: 512
@@ -21,7 +21,7 @@ model:
   # T frames => ResNet-50 => T X 2048 => GRU => 512 => regressor =>
   # SMPL parameters (82) => token encoder => N X 512
   resnet_out_dim: 2048
-  hmr2_out_dim: 82
+  hmr2_out_dim: 226
   gru_layers: 2
   smpl_num_tokens: 8 # number of tokens (N) to represent the SMPL parameters
   branch_b_out_dim: 512

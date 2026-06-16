@@ -20,7 +20,7 @@ model:
   # Branch B: Bare Body Stream
   # T frames => PARE/PyMAF/HMR2.0 => T X 2048 => GRU => 512 => regressor => 82 => token encoder => N X 512
   resnet_out_dim: 2048 # verify this after swapping to HMR2.0
-  hmr2_out_dim: 82
+  hmr2_out_dim: 226
   gru_layers: 2
   smpl_num_tokens: 8
   branch_b_out_dim: 512
