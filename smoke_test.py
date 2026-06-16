@@ -86,7 +86,8 @@ def run_smoke_test(cfg_path='configs/smoke_test.yaml'):
         if p.requires_grad
         and 'age_head' not in name
         and 'gender_head' not in name
-    )
+        and 'mask_token' not in name
+)
 
     print(f"  Gradients flowing:  {grad_ok}")
 

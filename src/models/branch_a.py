@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from torchvision.models import vit_b_16, ViT_B_16_Weights
-
+# from torchvision.models import vit_b_16, ViT_B_16_Weights
+import torch
 
 class BranchA(nn.Module):
     def __init__(self, cfg):
@@ -15,9 +15,10 @@ class BranchA(nn.Module):
 
         # ViT-B backbone — pretrained on ImageNet
         # classification head removed, only encoder kept
-        backbone = vit_b_16(weights=ViT_B_16_Weights.DEFAULT)
-        backbone.heads = nn.Identity()
-        self.backbone = backbone
+        # backbone = vit_b_16(weights=ViT_B_16_Weights.DEFAULT)
+        # backbone.heads = nn.Identity()
+        # self.backbone = backbone
+        self.backbone = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
 
         # temporal transformer
         # input shape: [batch, seq, dim]
