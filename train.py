@@ -14,21 +14,26 @@ def freeze_backbones(model):
     for param in model.branch_a.backbone.parameters():
         param.requires_grad = False
     if hasattr(model, 'branch_b'):
-        for param in model.branch_b.backbone.parameters():
-            param.requires_grad = False
+        if hasattr(model.branch_b, 'backbone'):
+            for param in model.branch_b.backbone.parameters():
+                param.requires_grad = False
+        elif hasattr(model.branch_b, 'hmr2'):
+            for param in model.branch_b.hmr2.parameters():
+                param.requires_grad = False
         print("  Both backbones frozen")
     else:
         print("  Branch A backbone frozen (no Branch B)")
 
-
 def unfreeze_hmr_backbone(model):
     if hasattr(model, 'branch_b'):
-        for param in model.branch_b.backbone.parameters():
-            param.requires_grad = True
-        print("  Branch B backbone unfrozen (ResNet50)")
+        if hasattr(model.branch_b, 'backbone'):
+            for param in model.branch_b.backbone.parameters():
+                param.requires_grad = True
+            print("  Branch B backbone unfrozen (ResNet50)")
+        elif hasattr(model.branch_b, 'hmr2'):
+            print("  Branch B uses real HMR2.0 — keeping frozen (pretrained estimator)")
     else:
         print("  No Branch B to unfreeze — skipping")
-
 
 def unfreeze_sapiens_backbone(model):
     for param in model.branch_a.backbone.parameters():
@@ -57,7 +62,10 @@ def split_by_identity(dataset, val_ratio=0.2):
 def get_optimizer(model, cfg):
     backbone_params = list(model.branch_a.backbone.parameters())
     if hasattr(model, 'branch_b'):
-        backbone_params += list(model.branch_b.backbone.parameters())
+        if hasattr(model.branch_b, 'backbone'):
+            backbone_params += list(model.branch_b.backbone.parameters())
+        elif hasattr(model.branch_b, 'hmr2'):
+            backbone_params += list(model.branch_b.hmr2.parameters())
 
     backbone_ids = set(id(p) for p in backbone_params)
 

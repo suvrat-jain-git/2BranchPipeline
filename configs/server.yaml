@@ -9,7 +9,7 @@ dataset:
 
 model:
   # Branch A: Clothed Body Stream
-  # T frames => Sapiens2 => T X 768 => TT => T X 768 => LP => T X 512
+  # DINOV2, temporal transformer, linear projection
   vit_out_dim: 768
   temporal_heads: 8
   temporal_layers: 2
@@ -19,7 +19,7 @@ model:
 
   # Branch B: Bare Body Stream
   # T frames => PARE/PyMAF/HMR2.0 => T X 2048 => GRU => 512 => regressor => 82 => token encoder => N X 512
-  resnet_out_dim: 2048 # verify this after swapping to HMR2.0
+  resnet_out_dim: 2048
   hmr2_out_dim: 226
   gru_layers: 2
   smpl_num_tokens: 8
@@ -56,7 +56,7 @@ train:
   save_every: 5
   smoke_subset: 0
   val_ratio: 0.2
-  experiment_name: mock_branch_both
+  experiment_name: dinov2_hmr2_full
 
 # Evaluation
 evaluate:
