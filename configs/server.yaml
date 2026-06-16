@@ -15,14 +15,13 @@ model:
   temporal_layers: 2
   temporal_dropout: 0.1
   branch_a_out_dim: 512
-  use_branch_b: false
+  use_branch_b: true
 
   # Branch B: Bare Body Stream
   # T frames => PARE/PyMAF/HMR2.0 => T X 2048 => GRU => 512 => regressor => 82 => token encoder => N X 512
   resnet_out_dim: 2048 # verify this after swapping to HMR2.0
-  gru_hidden_dim: 512
+  hmr2_out_dim: 82
   gru_layers: 2
-  regressor_out_dim: 82
   smpl_num_tokens: 8
   branch_b_out_dim: 512
 
@@ -57,7 +56,7 @@ train:
   save_every: 5
   smoke_subset: 0
   val_ratio: 0.2
-  experiment_name: full_training_branch_a
+  experiment_name: mock_branch_both
 
 # Evaluation
 evaluate:

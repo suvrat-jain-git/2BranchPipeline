@@ -7,10 +7,9 @@ class BranchB(nn.Module):
     def __init__(self, cfg):
         super().__init__()
 
-        resnet_out_dim = cfg['model']['resnet_out_dim']   
-        gru_hidden_dim = cfg['model']['gru_hidden_dim']   
-        gru_layers = cfg['model']['gru_layers']          
-        regressor_out_dim = cfg['model']['regressor_out_dim'] 
+        resnet_out_dim = cfg['model']['resnet_out_dim']
+        hmr2_out_dim = cfg['model']['hmr2_out_dim']
+        gru_layers = cfg['model']['gru_layers']
         smpl_num_tokens = cfg['model']['smpl_num_tokens']
         branch_b_out_dim = cfg['model']['branch_b_out_dim']
 
@@ -20,23 +19,22 @@ class BranchB(nn.Module):
         backbone.fc = nn.Identity()
         self.backbone = backbone
 
-        # GRU
+	# mock HMR SMPL head - give SMPL parameters
+        self.mock_smpl_head = nn.Linear(resnet_out_dim,hmr2_out_dim)
+
+	# GRU
         self.gru = nn.GRU(
-            input_size=resnet_out_dim,
-            hidden_size=gru_hidden_dim,
+            input_size=hmr2_out_dim,
+            hidden_size=hmr2_out_dim,
             num_layers=gru_layers,
             batch_first=True,
             bidirectional=False
         )
 
-        # SMPL parameter regressor
-        # 512 => 82 (β + θ)
-        self.regressor = nn.Linear(gru_hidden_dim, regressor_out_dim)
-
         # SMPL token encoder
         # expands 82-dim SMPL parameters to N tokens of 512-dim
         self.token_encoder = nn.Linear(
-            regressor_out_dim,
+            hmr2_out_dim,
             smpl_num_tokens * branch_b_out_dim
         )
 
@@ -55,22 +53,22 @@ class BranchB(nn.Module):
         # [batch*T, 3, 224, 224] => [batch*T, 2048]
         x = self.backbone(x)
 
+	# mock HMR SMPL head predicts SMPL parameters
+	# [batch*T, 2048] => [batch*T, 82]
+        x = self.mock_smpl_head(x)
+
         # reshape back to separate batch and time dimensions
-        # [batch*T, 2048] => [batch, T, 2048]
+        # [batch*T, 82] => [batch, T, 82]
         x = x.view(batch, T, -1)
 
         # GRU processes sequence of T frame features
-        # input:  [batch, T, 2048] => [batch, T, 512] 
+        # input:  [batch, T, 82] => [batch, T,82]
         # output: x: all hidden state, _: final hidden state
         x, _ = self.gru(x)
 
         # take only the last time step hidden state
-        # [batch, T, 512] => [batch, 512]
+        # [batch, T, 82] => [batch, 82]
         x = x[:, -1, :]
-
-        # regressor maps to SMPL parameters
-        # [batch, 512] => [batch, 82]
-        x = self.regressor(x)
 
         # SMPL token encoder expands to N tokens
         # [batch, 82] => [batch, N*512]
@@ -80,8 +78,8 @@ class BranchB(nn.Module):
         # [batch, N*512] => [batch, N, 512]
         x = x.view(batch, self.smpl_num_tokens, self.branch_b_out_dim)
 
-        return x 
-    
+        return x
+
 if __name__ == '__main__':
     import yaml
 

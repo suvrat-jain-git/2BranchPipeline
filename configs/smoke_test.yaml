@@ -21,9 +21,8 @@ model:
   # T frames => ResNet-50 => T X 2048 => GRU => 512 => regressor =>
   # SMPL parameters (82) => token encoder => N X 512
   resnet_out_dim: 2048
-  gru_hidden_dim: 512
+  hmr2_out_dim: 82
   gru_layers: 2
-  regressor_out_dim: 82
   smpl_num_tokens: 8 # number of tokens (N) to represent the SMPL parameters
   branch_b_out_dim: 512
 

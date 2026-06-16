@@ -59,8 +59,8 @@ class BranchA(nn.Module):
         # [batch, T, 768] => [batch, T, 512]
         x = self.proj(x)
 
-        return x 
-    
+        return x
+
 if __name__ == '__main__':
     import yaml
 
