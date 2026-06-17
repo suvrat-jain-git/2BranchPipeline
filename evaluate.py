@@ -9,7 +9,6 @@ from torch.utils.data import DataLoader, Subset
 from src.data.dataset import CCVIDDataset
 from src.models.pipeline import Pipeline
 
-
 def extract_embeddings(model, loader, device):
     model.eval()
     embeddings = []
@@ -17,81 +16,57 @@ def extract_embeddings(model, loader, device):
 
     with torch.no_grad():
         for frames, label in loader:
-            frames = frames.to(device)
-
-            # forward pass — no labels in inference mode
+            frames = frames.to(device, non_blocking=True)
             output = model(frames, labels=None)
-
-            # l2 normalise identity embedding
-            # [batch, 75] => [batch, 75] normalised
             emb = F.normalize(output['embedding'], dim=1)
-
             embeddings.append(emb.cpu())
             labels.append(label)
 
-    # stack all batches
-    embeddings = torch.cat(embeddings, dim=0)  # total_num_sequences x 75
-    labels = torch.cat(labels, dim=0)          # total_num_sequences
+    embeddings = torch.cat(embeddings, dim=0)  # total_sequences x 512
+    labels = torch.cat(labels, dim=0)          # total_sequences
 
     return embeddings, labels 
  
-def compute_rank1_rank5(query_emb, query_labels,
-                        gallery_emb, gallery_labels):
-    # cosine similarity between all query and gallery embeddings
-    # [num_query, num_gallery]
+def compute_rank_metrics(query_emb, query_labels,
+                        gallery_emb, gallery_labels, ranks=(1,5,10)):
     sim_matrix = torch.mm(query_emb, gallery_emb.t())
-
     num_query = query_emb.shape[0]
-    rank1_correct = 0
-    rank5_correct = 0
+    rank_correct = {r: 0 for r in ranks}
 
     for i in range(num_query):
-        # similarity scores for this query against all gallery
-        sim = sim_matrix[i]           # [num_gallery]
+        sim = sim_matrix[i]
         q_label = query_labels[i].item()
 
-        # sort gallery by similarity descending
         sorted_indices = sim.argsort(descending=True)
         sorted_labels = gallery_labels[sorted_indices]
 
-        # rank-1: is top-1 match correct?
-        if sorted_labels[0].item() == q_label:
-            rank1_correct += 1
+        for r in ranks:
+            if q_label in sorted_labels[:r].tolist():
+                rank_correct[r] += 1
 
-        # rank-5: is correct match in top-5?
-        if q_label in sorted_labels[:5].tolist():
-            rank5_correct += 1
-
-    rank1 = 100.0 * rank1_correct / num_query
-    rank5 = 100.0 * rank5_correct / num_query
-    return rank1, rank5
-
+    rank_acc = {r: 100.0 * rank_correct[r] / num_query for r in ranks}
+    return rank_acc
 
 def compute_map(query_emb, query_labels,
                 gallery_emb, gallery_labels):
-    # cosine similarity matrix
-    sim_matrix = torch.mm(query_emb, gallery_emb.t())
-
-    num_query = query_emb.shape[0]
+    
+    sim_matrix = torch.mm(query_emb, gallery_emb.t()) 
+    num_query = query_emb.shape[0]  
     average_precisions = []
 
     for i in range(num_query):
         sim = sim_matrix[i]
         q_label = query_labels[i].item()
 
-        # sort gallery by similarity descending
         sorted_indices = sim.argsort(descending=True)
         sorted_labels = gallery_labels[sorted_indices]
 
-        # find positions of correct matches
         correct_mask = (sorted_labels == q_label)
         num_correct = correct_mask.sum().item()
 
         if num_correct == 0:
             continue
 
-        # compute average precision
-        # precision at each correct match position
         positions = torch.where(correct_mask)[0].float() + 1  # 1-indexed
         precisions = torch.arange(1, num_correct + 1).float() / positions
         ap = precisions.mean().item()
@@ -100,8 +75,7 @@ def compute_map(query_emb, query_labels,
     if len(average_precisions) == 0:
         return 0.0
 
-    map_score = 100.0 * sum(average_precisions) / len(average_precisions)
-    return map_score
+    return 100.0 * sum(average_precisions) / len(average_precisions)
 
 
 def compute_eer(query_emb, query_labels,
@@ -109,19 +83,15 @@ def compute_eer(query_emb, query_labels,
                 max_query=1000):
     num_query = query_emb.shape[0]
 
-    # skip EER if too many pairs for CPU
     if num_query > max_query:
-        print(f"  Skipping EER — {num_query} queries too many for CPU")
-        print(f"  EER will be computed on server")
+        print(f"  Skipping EER — {num_query} queries exceed max_query={max_query}")
         return -1.0
 
-    # compute all pairwise cosine similarities
     sim_matrix = torch.mm(query_emb, gallery_emb.t())
-
+    num_gallery = gallery_emb.shape[0]
+    
     scores = []
     is_genuine = []
-
-    num_gallery = gallery_emb.shape[0]
 
     for i in range(num_query):
         for j in range(num_gallery):
@@ -133,15 +103,12 @@ def compute_eer(query_emb, query_labels,
     scores = torch.tensor(scores)
     is_genuine = torch.tensor(is_genuine)
 
-    # sweep thresholds from -1 to 1
     thresholds = torch.linspace(-1, 1, steps=1000)
     min_diff = float('inf')
     eer = 0.0
 
     for threshold in thresholds:
-        # predicted same person if score >= threshold
         predicted_genuine = (scores >= threshold)
-
         genuine_mask  = (is_genuine == 1)
         impostor_mask = (is_genuine == 0)
 
@@ -160,29 +127,26 @@ def compute_eer(query_emb, query_labels,
 
     return eer * 100.0
 
-
 def evaluate(cfg_path='configs/server.yaml',
              checkpoint_path=None):
     print("=" * 60)
     print("EVALUATION")
     print("=" * 60)
 
-    # load config
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)
 
     device = torch.device(cfg['evaluate']['device'])
     print(f"\nDevice: {device}")
 
-    # Model
     print("\n[1/4] Loading model...")
     model = Pipeline(cfg).to(device)
 
-    # load checkpoint if provided
     if checkpoint_path is not None:
         checkpoint = torch.load(
             checkpoint_path,
-            map_location=device
+            map_location=device,
+            weights_only=False
         )
         model.load_state_dict(checkpoint['model_state_dict'])
         epoch = checkpoint['epoch']
@@ -191,12 +155,10 @@ def evaluate(cfg_path='configs/server.yaml',
         print("  No checkpoint provided — using random weights")
         print("  (for pipeline verification only)")
 
-    # Datasets 
     print("\n[2/4] Loading gallery and query datasets...")
     gallery_dataset = CCVIDDataset(cfg, split='gallery')
     query_dataset   = CCVIDDataset(cfg, split='query')
 
-        # apply subsets if specified in evaluate config
     gallery_subset = cfg['evaluate'].get('gallery_subset', 0)
     query_subset   = cfg['evaluate'].get('query_subset', 0)
 
@@ -222,19 +184,21 @@ def evaluate(cfg_path='configs/server.yaml',
         gallery_dataset,
         batch_size=cfg['evaluate']['batch_size'],
         shuffle=False,
-        num_workers=cfg['evaluate']['num_workers']
+        num_workers=cfg['evaluate']['num_workers'],
+        pin_memory=(cfg['evaluate']['device'] == 'cuda')
     )
+
     query_loader = DataLoader(
         query_dataset,
         batch_size=cfg['evaluate']['batch_size'],
         shuffle=False,
-        num_workers=cfg['evaluate']['num_workers']
+        num_workers=cfg['evaluate']['num_workers'],
+        pin_memory=(cfg['evaluate']['device'] == 'cuda')
     )
 
     print(f"  Gallery sequences: {len(gallery_dataset)}")
     print(f"  Query sequences:   {len(query_dataset)}")
 
-    # Extract embeddings
     print("\n[3/4] Extracting embeddings...")
     gallery_emb, gallery_labels = extract_embeddings(
         model, gallery_loader, device
@@ -246,12 +210,23 @@ def evaluate(cfg_path='configs/server.yaml',
     print(f"  Gallery embeddings: {gallery_emb.shape}")
     print(f"  Query embeddings:   {query_emb.shape}")
 
-    # Compute metrics
+    exp_name = cfg['train'].get('experiment_name', 'default')
+    emb_path = f"runs/{exp_name}/embeddings.pt"
+    os.makedirs(f"runs/{exp_name}", exist_ok=True)
+    torch.save({
+        'gallery_emb':    gallery_emb,
+        'gallery_labels': gallery_labels,
+        'query_emb':      query_emb,
+        'query_labels':   query_labels
+    }, emb_path)
+    print(f"  Embeddings saved: {emb_path}")
+
     print("\n[4/4] Computing metrics...")
 
-    rank1, rank5 = compute_rank1_rank5(
+    rank_acc = compute_rank_metrics(
         query_emb, query_labels,
-        gallery_emb, gallery_labels
+        gallery_emb, gallery_labels,
+        ranks=(1, 5, 10)
     )
 
     map_score = compute_map(
@@ -265,8 +240,9 @@ def evaluate(cfg_path='configs/server.yaml',
         max_query=1000
     )
 
-    print(f"\n  Rank-1 accuracy: {rank1:.2f}%")
-    print(f"  Rank-5 accuracy: {rank5:.2f}%")
+    print(f"  Rank-1 accuracy: {rank_acc[1]:.2f}%")
+    print(f"  Rank-5 accuracy: {rank_acc[5]:.2f}%")
+    print(f"  Rank-10 accuracy:{rank_acc[10]:.2f}%")
     print(f"  mAP:             {map_score:.2f}%")
     if eer >= 0:
         print(f"  EER:             {eer:.2f}%")
@@ -275,7 +251,7 @@ def evaluate(cfg_path='configs/server.yaml',
     print("EVALUATION COMPLETE")
     print("=" * 60)
 
-    return rank1, rank5, map_score, eer
+    return rank_acc[1], rank_acc[5], rank_acc[10], map_score, eer
 
 if __name__ == '__main__':
     import yaml
@@ -286,10 +262,13 @@ if __name__ == '__main__':
     exp_name = cfg['train'].get('experiment_name', 'default')
     checkpoint_path = None
 
-    for epoch in [60, 50, 40, 30, 20, 10, 6, 5, 4, 2]:
-        path = f"runs/{exp_name}/checkpoint_epoch_{epoch}.pth"
-        if os.path.exists(path):
-            checkpoint_path = path
+    for path_template in [
+        f"runs/{exp_name}/best_checkpoint.pth",
+        *[f"runs/{exp_name}/checkpoint_epoch_{e}.pth"
+          for e in [60, 50, 40, 30, 20, 10, 5]]
+    ]:
+        if os.path.exists(path_template):
+            checkpoint_path = path_template
             break
 
     print(f"Experiment:  {exp_name}")
