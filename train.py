@@ -66,11 +66,96 @@ def get_scheduler(optimizer, cfg):
         gamma=cfg['train']['lr_gamma']
     )
 
-def train_one_epoch(model, loader, optimizer, criterion, device, epoch):
+class IdentityBalancedSampler(torch.utils.data.Sampler):
+    def __init__(self, dataset, batch_size, num_instances=4):
+        self.batch_size = batch_size
+        self.num_instances = num_instances
+        self.num_pids = batch_size // num_instances
+
+        self.pid_to_indices = defaultdict(list)
+        for idx in range(len(dataset)):
+            if isinstance(dataset, Subset):
+                real_idx = dataset.indices[idx]
+                _, identity = dataset.dataset.sequences[real_idx]
+            else:
+                _, identity = dataset.sequences[idx]
+            self.pid_to_indices[identity].append(idx)
+
+        self.pids = list(self.pid_to_indices.keys())
+
+    def __iter__(self):
+        import random
+        indices = []
+        pids = self.pids.copy()
+        random.shuffle(pids)
+
+        for pid in pids:
+            pid_indices = self.pid_to_indices[pid].copy()
+            random.shuffle(pid_indices)
+            while len(pid_indices) < self.num_instances:
+                pid_indices += self.pid_to_indices[pid].copy()
+            indices.extend(pid_indices[:self.num_instances])
+
+        num_batches = len(indices) // self.batch_size
+        indices = indices[:num_batches * self.batch_size]
+        return iter(indices)
+
+    def __len__(self):
+        total = sum(
+            max(self.num_instances, len(v))
+            for v in self.pid_to_indices.values()
+        )
+        return (total // self.batch_size) * self.batch_size
+
+def triplet_loss(embeddings, labels, margin=0.3):
+    batch_size = embeddings.shape[0]
+
+    # pairwise L2 distance matrix [batch, batch]
+    dist = torch.cdist(embeddings, embeddings)
+
+    # label masks [batch, batch]
+    labels_col = labels.unsqueeze(0)   # [1, batch]
+    labels_row = labels.unsqueeze(1)   # [batch, 1]
+
+    pos_mask = (labels_row == labels_col)  # same identity
+    neg_mask = (labels_row != labels_col)  # different identity
+
+    # exclude diagonal (self distances)
+    eye = torch.eye(batch_size, dtype=torch.bool, device=embeddings.device)
+    pos_mask = pos_mask & ~eye
+
+    # valid anchors — must have at least one positive and one negative
+    valid = (pos_mask.sum(dim=1) > 0) & (neg_mask.sum(dim=1) > 0)
+
+    if valid.sum() == 0:
+        return torch.tensor(0.0, device=embeddings.device, requires_grad=True)
+
+    # hardest positive — max distance among same-class
+    # masked_fill sets non-positive pairs to -1e6 before max
+    pos_dist = dist.masked_fill(~pos_mask, -1e6)
+    hardest_pos = pos_dist.max(dim=1).values   # [batch]
+
+    # hardest negative — min distance among different-class
+    # masked_fill sets non-negative pairs to 1e6 before min
+    neg_dist = dist.masked_fill(~neg_mask, 1e6)
+    hardest_neg = neg_dist.min(dim=1).values   # [batch]
+
+    # triplet loss per anchor
+    triplet = F.relu(hardest_pos - hardest_neg + margin)
+
+    # average only over valid anchors
+    loss = triplet[valid].mean()
+
+    return loss
+
+def train_one_epoch(model, loader, optimizer, criterion, device, epoch, cfg):
     model.train()
     total_loss = 0.0
     correct = 0
     total = 0
+
+    triplet_margin = cfg['train'].get('triplet_margin', 0.3)
+    triplet_weight = cfg['train'].get('triplet_weight', 0.5)
 
     for batch_idx, (frames, labels) in enumerate(loader):
         frames = frames.to(device, non_blocking=True)
@@ -80,9 +165,18 @@ def train_one_epoch(model, loader, optimizer, criterion, device, epoch):
 
         output = model(frames, labels)
 
-        loss = criterion(output['identity'], labels)
+        arcface_loss = criterion(output['identity'], labels)
+
+        trip_loss = triplet_loss(
+            output['embedding'],
+            labels,
+            margin=triplet_margin
+        )
+
+        loss = arcface_loss + triplet_weight * trip_loss
 
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
         optimizer.step()
 
         total_loss += loss.item()
@@ -92,10 +186,11 @@ def train_one_epoch(model, loader, optimizer, criterion, device, epoch):
 
         if batch_idx % 10 == 0:
             print(f"  Epoch {epoch} | Batch {batch_idx}/{len(loader)} "
-                  f"| Loss: {loss.item():.4f}") 
+                  f"| Loss: {loss.item():.4f} "
+                  f"| ArcFace: {arcface_loss.item():.4f} "
+                  f"| Triplet: {trip_loss.item():.4f}")
             print(f"  Predictions: {predicted[:4].tolist()}")
             print(f"  Targets:     {labels[:4].tolist()}")
-
 
     avg_loss = total_loss / len(loader)
     accuracy = 100.0 * correct / total
@@ -138,8 +233,8 @@ def validate_one_epoch(model, val_loader, gallery_loader, device):
             frames = frames.to(device, non_blocking=True)
             output = model(frames, labels=None)
             emb = F.normalize(output['embedding'], dim=1)
-            query_embeddings.append(emb.cpu())
-            query_labels.append(labels)
+            query_embeddings.append(emb)
+            query_labels.append(labels.to(device))
 
     gallery_embeddings = []
     gallery_labels = []
@@ -148,8 +243,8 @@ def validate_one_epoch(model, val_loader, gallery_loader, device):
             frames = frames.to(device, non_blocking=True)
             output = model(frames, labels=None)
             emb = F.normalize(output['embedding'], dim=1)
-            gallery_embeddings.append(emb.cpu())
-            gallery_labels.append(labels)
+            gallery_embeddings.append(emb)
+            gallery_labels.append(labels.to(device))
 
     query_embeddings   = torch.cat(query_embeddings)    # [Nq, 512]
     query_labels       = torch.cat(query_labels)        # [Nq]
@@ -162,7 +257,11 @@ def validate_one_epoch(model, val_loader, gallery_loader, device):
     correct = (gallery_labels[predicted] == query_labels).sum().item()
     rank1 = 100.0 * correct / len(query_labels)
 
-    map_score = compute_map(sim, query_labels, gallery_labels)
+    sim_cpu          = sim.cpu()
+    query_labels_cpu = query_labels.cpu()
+    gallery_labels_cpu = gallery_labels.cpu()
+
+    map_score = compute_map(sim_cpu, query_labels_cpu, gallery_labels_cpu)
 
     return rank1, map_score
 
@@ -180,7 +279,7 @@ def save_checkpoint(model, optimizer, epoch, loss, cfg):
     torch.save(checkpoint, path)
     print(f"  Checkpoint saved: {path}")
 
-def save_best_checkpoint(model, optimizer, epoch, val_rank1, cfg):
+def save_best_checkpoint(model, optimizer, epoch, val_rank1, val_map, cfg):
     exp_name = cfg['train'].get('experiment_name', 'default')
     save_dir = f"runs/{exp_name}"
     os.makedirs(save_dir, exist_ok=True)
@@ -188,12 +287,15 @@ def save_best_checkpoint(model, optimizer, epoch, val_rank1, cfg):
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'val_rank1': val_rank1
+        'val_rank1': val_rank1,
+        'val_map': val_map
     }
     path = f"{save_dir}/best_checkpoint.pth"
     torch.save(checkpoint, path)
     print(f"  Best checkpoint saved: {path} "
-          f"(epoch {epoch}, val_rank1={val_rank1:.2f}%)")
+        f"(epoch {epoch}, "
+        f"val_rank1={val_rank1:.2f}%, "
+        f"val_map={val_map:.2f}%)")
 
 def train(cfg_path='configs/server.yaml'):
     print("=" * 60)
@@ -225,10 +327,16 @@ def train(cfg_path='configs/server.yaml'):
 
     pin_memory = (cfg['train']['device'] == 'cuda')
 
+    sampler = IdentityBalancedSampler(
+        train_dataset,
+        batch_size=cfg['train']['batch_size'],
+        num_instances=cfg['train'].get('num_instances', 4)
+    )
+
     loader = DataLoader(
         train_dataset,
         batch_size=cfg['train']['batch_size'],
-        shuffle=True,
+        sampler=sampler,           # replaces shuffle=True
         num_workers=cfg['train']['num_workers'],
         pin_memory=pin_memory
     )
@@ -261,7 +369,6 @@ def train(cfg_path='configs/server.yaml'):
     total = sum(p.numel() for p in model.parameters())
     print(f"  Total params:     {total:,}")
 
-    # Phase 1 — freeze branch A
     print("\n  Phase 1: freezing branch A")
     freeze_backbone(model)
     print(f"  Trainable params: {count_trainable(model):,}")
@@ -274,6 +381,8 @@ def train(cfg_path='configs/server.yaml'):
     print(f"  Base LR:      {cfg['train']['base_lr']}")
     print(f"  Backbone LR:  {cfg['train']['backbone_lr']}")
     print(f"  Weight decay: {cfg['train']['weight_decay']}")
+    print(f"  Triplet margin:   {cfg['train'].get('triplet_margin', 0.3)}")
+    print(f"  Triplet weight:   {cfg['train'].get('triplet_weight', 0.5)}")
 
     print("\n[4/4] Training...")
     num_epochs = cfg['train']['num_epochs']
@@ -296,7 +405,7 @@ def train(cfg_path='configs/server.yaml'):
                 print(f"  Group {i} lr: {group['lr']}")
 
         avg_loss, accuracy = train_one_epoch(
-            model, loader, optimizer, criterion, device, epoch
+            model, loader, optimizer, criterion, device, epoch, cfg
         )
 
         scheduler.step()
@@ -311,14 +420,13 @@ def train(cfg_path='configs/server.yaml'):
             print(f"  Val Rank-1: {val_rank1:.2f}%")
             print(f"  Val mAP:    {val_map:.2f}%")
 
-            if val_rank1 >= best_val_rank1:
+            if val_map >= best_val_map:
+                best_val_map   = val_map
                 best_val_rank1 = val_rank1
                 save_best_checkpoint(
-                    model, optimizer, epoch, val_rank1, cfg
+                    model, optimizer, epoch,
+                    val_rank1, val_map, cfg
                 )
-            
-            if val_map >= best_val_map:
-                best_val_map = val_map
 
         if epoch % cfg['train']['save_every'] == 0:
             save_checkpoint(model, optimizer, epoch, avg_loss, cfg)

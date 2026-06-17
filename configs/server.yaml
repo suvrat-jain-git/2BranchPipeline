@@ -53,7 +53,10 @@ train:
   save_every: 5
   val_every: 5
   val_ratio: 0.2
-  experiment_name: branch_a_and_b
+  num_instances: 4
+  triplet_margin: 0.3
+  triplet_weight: 0.5
+  experiment_name: branch_a_triplet
 
 # Evaluation
 evaluate:
