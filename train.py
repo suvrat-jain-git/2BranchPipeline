@@ -5,46 +5,27 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yaml
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 from src.data.dataset import CCVIDDataset
 from src.models.pipeline import Pipeline
 from collections import defaultdict
 
-def freeze_backbones(model):
+def freeze_backbone(model):
     for param in model.branch_a.backbone.parameters():
         param.requires_grad = False
-    if hasattr(model, 'branch_b'):
-        if hasattr(model.branch_b, 'backbone'):
-            for param in model.branch_b.backbone.parameters():
-                param.requires_grad = False
-        elif hasattr(model.branch_b, 'hmr2'):
-            for param in model.branch_b.hmr2.parameters():
-                param.requires_grad = False
-        print("  Both backbones frozen")
-    else:
-        print("  Branch A backbone frozen (no Branch B)")
+    print("  Branch A frozen")
 
-def unfreeze_hmr_backbone(model):
-    if hasattr(model, 'branch_b'):
-        if hasattr(model.branch_b, 'backbone'):
-            for param in model.branch_b.backbone.parameters():
-                param.requires_grad = True
-            print("  Branch B backbone unfrozen (ResNet50)")
-        elif hasattr(model.branch_b, 'hmr2'):
-            print("  Branch B uses real HMR2.0 — keeping frozen (pretrained estimator)")
-    else:
-        print("  No Branch B to unfreeze — skipping")
-
-def unfreeze_sapiens_backbone(model):
+def unfreeze_backbone(model):
     for param in model.branch_a.backbone.parameters():
         param.requires_grad = True
-    print("  Branch A backbone unfrozen")
-
+    print("  Branch A unfrozen")
 
 def count_trainable(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-def split_by_identity(dataset, val_ratio=0.2):
+def split_sequences_per_identity(dataset, val_ratio=0.2):
+    import random
     identity_to_indices = defaultdict(list)
     for idx, (seq_path, identity) in enumerate(dataset.sequences):
         identity_to_indices[identity].append(idx)
@@ -53,40 +34,37 @@ def split_by_identity(dataset, val_ratio=0.2):
     val_indices = []
 
     for identity, indices in identity_to_indices.items():
+        indices = indices.copy()
+        random.shuffle(indices)
         n_val = max(1, int(len(indices) * val_ratio))
         val_indices.extend(indices[-n_val:])
         train_indices.extend(indices[:-n_val])
 
-    return train_indices, val_indices
+    return train_indices, val_indices 
 
 def get_optimizer(model, cfg):
     backbone_params = list(model.branch_a.backbone.parameters())
-    if hasattr(model, 'branch_b'):
-        if hasattr(model.branch_b, 'backbone'):
-            backbone_params += list(model.branch_b.backbone.parameters())
-        elif hasattr(model.branch_b, 'hmr2'):
-            backbone_params += list(model.branch_b.hmr2.parameters())
-
     backbone_ids = set(id(p) for p in backbone_params)
 
     new_params = [
         p for p in model.parameters()
-        if id(p) not in backbone_ids
+        if p.requires_grad
+        and id(p) not in backbone_ids
     ]
 
     optimizer = torch.optim.AdamW([
-        {
-            'params': backbone_params,
-            'lr': cfg['train']['backbone_lr']
-        },
-        {
-            'params': new_params,
-            'lr': cfg['train']['base_lr']
-        }
+        {'params': backbone_params, 'lr': cfg['train']['backbone_lr']},
+        {'params': new_params,      'lr': cfg['train']['base_lr']}
     ], weight_decay=cfg['train']['weight_decay'])
 
-    return optimizer
+    return optimizer 
 
+def get_scheduler(optimizer, cfg):
+    return torch.optim.lr_scheduler.StepLR(
+        optimizer,
+        step_size=cfg['train']['lr_step'],
+        gamma=cfg['train']['lr_gamma']
+    )
 
 def train_one_epoch(model, loader, optimizer, criterion, device, epoch):
     model.train()
@@ -95,23 +73,18 @@ def train_one_epoch(model, loader, optimizer, criterion, device, epoch):
     total = 0
 
     for batch_idx, (frames, labels) in enumerate(loader):
-        frames = frames.to(device)
-        labels = labels.to(device)
+        frames = frames.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
-        # zero gradients before forward pass
         optimizer.zero_grad()
 
-        # forward pass
         output = model(frames, labels)
 
-        # identity loss only — CCVID has no age/gender labels
         loss = criterion(output['identity'], labels)
 
-        # backward pass
         loss.backward()
         optimizer.step()
 
-        # track metrics
         total_loss += loss.item()
         predicted = output['identity'].argmax(dim=1)
         correct += (predicted == labels).sum().item()
@@ -128,31 +101,70 @@ def train_one_epoch(model, loader, optimizer, criterion, device, epoch):
     accuracy = 100.0 * correct / total
     return avg_loss, accuracy
 
-def validate_one_epoch(model, loader, criterion, device, epoch):
+def compute_map(sim, query_labels, gallery_labels):
+    ap_list = []
+
+    for q in range(sim.shape[0]):
+        q_label = query_labels[q]
+
+        sorted_indices = sim[q].argsort(descending=True)
+        sorted_labels = gallery_labels[sorted_indices]
+
+        matches = (sorted_labels == q_label)
+
+        if matches.sum() == 0:
+            continue
+
+        num_relevant = 0
+        precision_sum = 0.0
+
+        for rank, match in enumerate(matches):
+            if match:
+                num_relevant += 1
+                precision_sum += num_relevant / (rank + 1)
+
+        ap = precision_sum / matches.sum().item()
+        ap_list.append(ap)
+
+    return 100.0 * sum(ap_list) / len(ap_list) if ap_list else 0.0
+
+def validate_one_epoch(model, val_loader, gallery_loader, device):
     model.eval()
-    total_loss = 0.0
-    correct = 0
-    total = 0
 
+    query_embeddings = []
+    query_labels = []
     with torch.no_grad():
-        for frames, labels in loader:
-            frames = frames.to(device)
-            labels = labels.to(device)
-
-            # inference mode — no labels passed to ArcFace
+        for frames, labels in val_loader:
+            frames = frames.to(device, non_blocking=True)
             output = model(frames, labels=None)
+            emb = F.normalize(output['embedding'], dim=1)
+            query_embeddings.append(emb.cpu())
+            query_labels.append(labels)
 
-            # compute loss without ArcFace margin
-            loss = criterion(output['identity'], labels)
+    gallery_embeddings = []
+    gallery_labels = []
+    with torch.no_grad():
+        for frames, labels in gallery_loader:
+            frames = frames.to(device, non_blocking=True)
+            output = model(frames, labels=None)
+            emb = F.normalize(output['embedding'], dim=1)
+            gallery_embeddings.append(emb.cpu())
+            gallery_labels.append(labels)
 
-            total_loss += loss.item()
-            predicted = output['identity'].argmax(dim=1)
-            correct += (predicted == labels).sum().item()
-            total += labels.size(0)
+    query_embeddings   = torch.cat(query_embeddings)    # [Nq, 512]
+    query_labels       = torch.cat(query_labels)        # [Nq]
+    gallery_embeddings = torch.cat(gallery_embeddings)  # [Ng, 512]
+    gallery_labels     = torch.cat(gallery_labels)      # [Ng] 
 
-    avg_loss = total_loss / len(loader)
-    accuracy = 100.0 * correct / total
-    return avg_loss, accuracy
+    sim = torch.mm(query_embeddings, gallery_embeddings.t()) # [Nq, Ng]
+
+    predicted = sim.argmax(dim=1)
+    correct = (gallery_labels[predicted] == query_labels).sum().item()
+    rank1 = 100.0 * correct / len(query_labels)
+
+    map_score = compute_map(sim, query_labels, gallery_labels)
+
+    return rank1, map_score
 
 def save_checkpoint(model, optimizer, epoch, loss, cfg):
     exp_name = cfg['train'].get('experiment_name', 'default')
@@ -168,34 +180,39 @@ def save_checkpoint(model, optimizer, epoch, loss, cfg):
     torch.save(checkpoint, path)
     print(f"  Checkpoint saved: {path}")
 
+def save_best_checkpoint(model, optimizer, epoch, val_rank1, cfg):
+    exp_name = cfg['train'].get('experiment_name', 'default')
+    save_dir = f"runs/{exp_name}"
+    os.makedirs(save_dir, exist_ok=True)
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'val_rank1': val_rank1
+    }
+    path = f"{save_dir}/best_checkpoint.pth"
+    torch.save(checkpoint, path)
+    print(f"  Best checkpoint saved: {path} "
+          f"(epoch {epoch}, val_rank1={val_rank1:.2f}%)")
+
 def train(cfg_path='configs/server.yaml'):
     print("=" * 60)
     print("TRAINING")
     print("=" * 60)
 
-    # load config
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)
 
     device = torch.device(cfg['train']['device'])
     print(f"\nDevice: {device}")
 
-    # Dataset 
     print("\n[1/4] Loading dataset...")
     dataset = CCVIDDataset(cfg, split='train')
+    print(f"  Using full dataset: {len(dataset)} sequences") 
 
-    # use small subset locally for logic verification
-    smoke_subset = cfg['train'].get('smoke_subset', 0)
-    if smoke_subset > 0:
-        dataset = Subset(dataset, list(range(smoke_subset)))
-        print(f"  Using smoke subset: {smoke_subset} sequences")
-    else:
-        print(f"  Using full dataset: {len(dataset)} sequences")
-
-    # split dataset into train and val
     val_ratio = cfg['train'].get('val_ratio', 0.0)
     if val_ratio > 0:
-        train_indices, val_indices = split_by_identity(dataset, val_ratio)
+        train_indices, val_indices = split_sequences_per_identity(dataset, val_ratio)
         train_dataset = Subset(dataset, train_indices)
         val_dataset   = Subset(dataset, val_indices)
         print(f"  Train sequences: {len(train_dataset)}")
@@ -206,12 +223,14 @@ def train(cfg_path='configs/server.yaml'):
         print(f"  Train sequences: {len(train_dataset)}")
         print(f"  No validation split")
 
+    pin_memory = (cfg['train']['device'] == 'cuda')
+
     loader = DataLoader(
         train_dataset,
         batch_size=cfg['train']['batch_size'],
         shuffle=True,
         num_workers=cfg['train']['num_workers'],
-        pin_memory=False
+        pin_memory=pin_memory
     )
 
     val_loader = None
@@ -221,64 +240,58 @@ def train(cfg_path='configs/server.yaml'):
             batch_size=cfg['train']['batch_size'],
             shuffle=False,
             num_workers=cfg['train']['num_workers'],
-            pin_memory=False
+            pin_memory=pin_memory
+        )
+
+    # gallery loader — train sequences as gallery during validation
+    gallery_loader = None
+    if val_dataset is not None:
+        gallery_loader = DataLoader(
+            train_dataset,
+            batch_size=cfg['train']['batch_size'],
+            shuffle=False,
+            num_workers=cfg['train']['num_workers'],
+            pin_memory=pin_memory
         )
 
     print(f"  Train batches per epoch: {len(loader)}")
 
-    # Model
     print("\n[2/4] Building model...")
     model = Pipeline(cfg).to(device)
     total = sum(p.numel() for p in model.parameters())
     print(f"  Total params:     {total:,}")
 
-    # Phase 1 — freeze both backbones
-    print("\n  Phase 1: freezing both backbones")
-    freeze_backbones(model)
+    # Phase 1 — freeze branch A
+    print("\n  Phase 1: freezing branch A")
+    freeze_backbone(model)
     print(f"  Trainable params: {count_trainable(model):,}")
 
-    # Optimizer and loss 
     print("\n[3/4] Setting up optimizer...")
     optimizer = get_optimizer(model, cfg)
-    scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer,
-        step_size=cfg['train']['lr_step'],
-        gamma=cfg['train']['lr_gamma']
-    )
+    scheduler = get_scheduler(optimizer, cfg)
     criterion = nn.CrossEntropyLoss()
     print(f"  Optimizer:    AdamW")
     print(f"  Base LR:      {cfg['train']['base_lr']}")
     print(f"  Backbone LR:  {cfg['train']['backbone_lr']}")
     print(f"  Weight decay: {cfg['train']['weight_decay']}")
 
-    # Training loop
     print("\n[4/4] Training...")
     num_epochs = cfg['train']['num_epochs']
-    unfreeze_hmr_epoch = cfg['train']['unfreeze_hmr_epoch']
-    unfreeze_all_epoch = cfg['train']['unfreeze_all_epoch']
+    unfreeze_epoch = cfg['train']['unfreeze_all_epoch']
+    val_every      = cfg['train'].get('val_every', 5)
+    best_val_rank1 = 0.0
+    best_val_map   = 0.0
 
     for epoch in range(1, num_epochs + 1):
         print(f"\nEpoch {epoch}/{num_epochs}")
 
-        # Phase 2 — unfreeze Branch B backbone only
-        if epoch == unfreeze_hmr_epoch:
+        if epoch == unfreeze_epoch:
             print("  Phase 2:")
-            unfreeze_hmr_backbone(model)
+            unfreeze_backbone(model)
             print(f"  Trainable params: {count_trainable(model):,}")
-            # rebuild optimizer to include newly unfrozen params
             optimizer = get_optimizer(model, cfg)
-            print("  Optimizer rebuilt for Phase 2")
-            for i, group in enumerate(optimizer.param_groups):
-                print(f"  Group {i} lr: {group['lr']}")
-
-        # Phase 3 — unfreeze Branch A backbone
-        if epoch == unfreeze_all_epoch:
-            print("  Phase 3:")
-            unfreeze_sapiens_backbone(model)
-            print(f"  Trainable params: {count_trainable(model):,}")
-            # rebuild optimizer to include newly unfrozen params
-            optimizer = get_optimizer(model, cfg)
-            print("  Optimizer rebuilt for Phase 3")
+            scheduler = get_scheduler(optimizer, cfg)
+            print("  Optimizer and scheduler rebuilt for Phase 2")
             for i, group in enumerate(optimizer.param_groups):
                 print(f"  Group {i} lr: {group['lr']}")
 
@@ -291,13 +304,21 @@ def train(cfg_path='configs/server.yaml'):
         print(f"  Train Loss: {avg_loss:.4f}")
         print(f"  Train Acc:  {accuracy:.2f}%")
 
-        # validation
-        if val_loader is not None:
-            val_loss, val_acc = validate_one_epoch(
-                model, val_loader, criterion, device, epoch
+        if val_loader is not None and epoch % val_every == 0:
+            val_rank1, val_map = validate_one_epoch(
+                model, val_loader, gallery_loader, device
             )
-            print(f"  Val Loss:   {val_loss:.4f}")
-            print(f"  Val Acc:    {val_acc:.2f}%")
+            print(f"  Val Rank-1: {val_rank1:.2f}%")
+            print(f"  Val mAP:    {val_map:.2f}%")
+
+            if val_rank1 > best_val_rank1:
+                best_val_rank1 = val_rank1
+                save_best_checkpoint(
+                    model, optimizer, epoch, val_rank1, cfg
+                )
+            
+            if val_map > best_val_map:
+                best_val_map = val_map
 
         if epoch % cfg['train']['save_every'] == 0:
             save_checkpoint(model, optimizer, epoch, avg_loss, cfg)
@@ -305,7 +326,6 @@ def train(cfg_path='configs/server.yaml'):
     print("\n" + "=" * 60)
     print("TRAINING COMPLETE")
     print("=" * 60)
-
 
 if __name__ == '__main__':
     train()
