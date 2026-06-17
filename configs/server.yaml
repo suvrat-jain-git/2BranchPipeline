@@ -15,7 +15,7 @@ model:
   temporal_layers: 2
   temporal_dropout: 0.1
   branch_a_out_dim: 512
-  use_branch_b: false
+  use_branch_b: true
 
   # Branch B: Bare Body Stream
   # T frames => HMR2.0 => T X 226 => GRU => T X 226 => token encoder => T X 512
@@ -41,22 +41,22 @@ smoke:
 # Training
 train:
   device: cuda
-  num_epochs: 40
+  num_epochs: 60
   batch_size: 32
   num_workers: 4
   base_lr: 0.0001
   backbone_lr: 0.00001
   weight_decay: 0.01
-  lr_step: 20
+  lr_step: 15
   lr_gamma: 0.1
-  unfreeze_all_epoch: 21
+  unfreeze_all_epoch: 31
   save_every: 5
   val_every: 5
   val_ratio: 0.2
   num_instances: 4
   triplet_margin: 0.3
   triplet_weight: 0.5
-  experiment_name: branch_a_triplet
+  experiment_name: branch_a_and_b_triplet
 
 # Evaluation
 evaluate:
