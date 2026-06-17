@@ -311,13 +311,13 @@ def train(cfg_path='configs/server.yaml'):
             print(f"  Val Rank-1: {val_rank1:.2f}%")
             print(f"  Val mAP:    {val_map:.2f}%")
 
-            if val_rank1 > best_val_rank1:
+            if val_rank1 >= best_val_rank1:
                 best_val_rank1 = val_rank1
                 save_best_checkpoint(
                     model, optimizer, epoch, val_rank1, cfg
                 )
             
-            if val_map > best_val_map:
+            if val_map >= best_val_map:
                 best_val_map = val_map
 
         if epoch % cfg['train']['save_every'] == 0:

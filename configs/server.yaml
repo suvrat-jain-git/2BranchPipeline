@@ -53,7 +53,7 @@ train:
   save_every: 5
   val_every: 5
   val_ratio: 0.2
-  experiment_name: branch_a_alone
+  experiment_name: branch_a_and_b
 
 # Evaluation
 evaluate:
