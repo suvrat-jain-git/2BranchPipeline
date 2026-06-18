@@ -60,10 +60,10 @@ def get_optimizer(model, cfg):
     return optimizer 
 
 def get_scheduler(optimizer, cfg):
-    return torch.optim.lr_scheduler.StepLR(
+    return torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
-        step_size=cfg['train']['lr_step'],
-        gamma=cfg['train']['lr_gamma']
+        T_max=cfg['train']['T_max'],
+        eta_min=1e-6
     )
 
 class IdentityBalancedSampler(torch.utils.data.Sampler):
@@ -85,27 +85,32 @@ class IdentityBalancedSampler(torch.utils.data.Sampler):
 
     def __iter__(self):
         import random
-        indices = []
+        batch_indices = []
         pids = self.pids.copy()
         random.shuffle(pids)
 
-        for pid in pids:
-            pid_indices = self.pid_to_indices[pid].copy()
-            random.shuffle(pid_indices)
-            while len(pid_indices) < self.num_instances:
-                pid_indices += self.pid_to_indices[pid].copy()
-            indices.extend(pid_indices[:self.num_instances])
+        # iterate through all pids in groups of num_pids
+        # each identity appears exactly once per epoch
+        idx = 0
+        while idx + self.num_pids <= len(pids):
+            selected_pids = pids[idx:idx + self.num_pids]
 
-        num_batches = len(indices) // self.batch_size
-        indices = indices[:num_batches * self.batch_size]
-        return iter(indices)
+            batch = []
+            for pid in selected_pids:
+                pid_indices = self.pid_to_indices[pid].copy()
+                random.shuffle(pid_indices)
+                while len(pid_indices) < self.num_instances:
+                    pid_indices += self.pid_to_indices[pid].copy()
+                batch.extend(pid_indices[:self.num_instances])
+
+            batch_indices.extend(batch)
+            idx += self.num_pids
+
+        return iter(batch_indices)
 
     def __len__(self):
-        total = sum(
-            max(self.num_instances, len(v))
-            for v in self.pid_to_indices.values()
-        )
-        return (total // self.batch_size) * self.batch_size
+        num_batches = len(self.pids) // self.num_pids
+        return num_batches * self.batch_size
 
 def triplet_loss(embeddings, labels, margin=0.3):
     batch_size = embeddings.shape[0]
@@ -399,8 +404,14 @@ def train(cfg_path='configs/server.yaml'):
             unfreeze_backbone(model)
             print(f"  Trainable params: {count_trainable(model):,}")
             optimizer = get_optimizer(model, cfg)
-            scheduler = get_scheduler(optimizer, cfg)
+            remaining_epochs = num_epochs - epoch + 1
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=remaining_epochs,
+                eta_min=1e-6
+            )
             print("  Optimizer and scheduler rebuilt for Phase 2")
+            print(f"  Remaining epochs: {remaining_epochs}")
             for i, group in enumerate(optimizer.param_groups):
                 print(f"  Group {i} lr: {group['lr']}")
 
